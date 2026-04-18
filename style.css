@@ -5,4 +5,25 @@ html, body {
 
 canvas {
   display: block;
+  touch-action: none; /* allow custom touch gestures */
+}
+
+/* Controls panel responsive layout */
+#controls {
+  font-family: Arial, sans-serif;
+}
+
+@media (max-width: 600px) {
+  #controls {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    padding: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  #controls select, #controls button { flex: 1 1 auto; }
+  #directions { width: 100%; font-size: 13px; }
 }

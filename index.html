@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>Sketch</title>
+    <title>Tangrams</title>
 
     <link rel="stylesheet" type="text/css" href="style.css">
 
@@ -13,6 +13,15 @@
   </head>
 
   <body>
+    <div id="controls" style="position:fixed;top:8px;left:8px;z-index:999;background:rgba(255,255,255,0.95);padding:8px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.12);max-width:320px;">
+      <label for="levelSelect">Level:</label>
+      <select id="levelSelect"></select>
+      <button id="checkBtn">Check Solution</button>
+      <button id="resetBtn">Reset</button>
+      <div id="directions" style="margin-top:8px;font-size:13px;color:#222;line-height:1.25;">
+        Arrange pieces into the gray target on the left. Use mouse or touch to drag, tap/drag to rotate, press <strong>f</strong> to flip and <strong>r</strong> to rotate. When pieces fully cover the target without overlapping, click <strong>Check Solution</strong>.
+      </div>
+    </div>
     <script src="sketch.js"></script>
   </body>
 </html>
