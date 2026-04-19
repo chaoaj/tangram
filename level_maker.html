@@ -1,0 +1,479 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Level Maker</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 8px; }
+    #canvas { border: 1px solid #ccc; cursor: crosshair; }
+    #controls { margin-top: 8px; }
+    button { margin-right: 8px; }
+    textarea { width: 100%; height: 220px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h3>Level Maker — arrange pieces and export target outline</h3>
+  <canvas id="canvas" width="1000" height="700"></canvas>
+  <div id="controls">
+    <button id="resetBtn">Reset</button>
+    <button id="exportBtn">Export JSON</button>
+    <button id="saveBtn">Save to levels-new.json</button>
+    <label style="margin-left:12px"><input id="snapChk" type="checkbox"> Snap to grid</label>
+    <label style="margin-left:8px">Grid size: <input id="gridSize" type="number" min="4" max="200" value="20" style="width:64px"></label>
+    <label>Preview scale: <input id="scaleRange" type="range" min="0.5" max="2" step="0.1" value="1"></label>
+  </div>
+  <textarea id="out" placeholder="Exported JSON will appear here"></textarea>
+
+<script>
+// Simple level maker: drag/rotate pieces and export a silhouette-style outline JSON
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const out = document.getElementById('out');
+const resetBtn = document.getElementById('resetBtn');
+const exportBtn = document.getElementById('exportBtn');
+const scaleRange = document.getElementById('scaleRange');
+
+let scale = parseFloat(scaleRange.value);
+let snapEnabled = false;
+let gridSize = parseInt(document.getElementById('gridSize').value, 10) || 20;
+const snapChk = document.getElementById('snapChk');
+snapChk.onchange = () => { snapEnabled = snapChk.checked; };
+document.getElementById('gridSize').oninput = (e) => { gridSize = parseInt(e.target.value,10) || 20; draw(); };
+scaleRange.oninput = () => { scale = parseFloat(scaleRange.value); draw(); };
+
+// unit piece definitions (normalized inside 0..1 square) similar to game
+const u = (x,y) => [x,y];
+const unitPolys = [
+  { name: 'LT1', verts: [u(0,0), u(0.5,0.5), u(1,0)] },
+  { name: 'LT2', verts: [u(0,1), u(0.5,0.5), u(1,1)] },
+  { name: 'MT', verts: [u(0.5,0.25), u(1.0,0.25), u(0.5,0.75)] },
+  { name: 'ST1', verts: [u(0.25,0.25), u(0.5,0.5), u(0.75,0.25)] },
+  { name: 'ST2', verts: [u(0.25,0.75), u(0.5,0.5), u(0.75,0.75)] },
+  { name: 'SQ', verts: [u(0.5,0.25), u(0.75,0.5), u(0.5,0.75), u(0.25,0.5)] },
+  // Parallelogram (PA) — build to match sizes used in sketch.js
+  (() => {
+    const desiredWNorm = 0.5;
+    const desiredHNorm = 0.25;
+    let bNorm = Math.min(0.9, desiredWNorm);
+    let hNorm = Math.min(0.9, desiredHNorm);
+    const shear = hNorm; // choose shear so left corner approximates 45°
+    const paCx = 0.65;
+    const paCy = 0.5;
+    const minCx = bNorm / 2;
+    const maxCx = Math.max(minCx, 1 - bNorm / 2 - shear);
+    const cx = Math.max(minCx, Math.min(paCx, maxCx));
+    const cy = Math.max(paCy, Math.min(paCy, 1));
+    const tlx = cx - bNorm / 2;
+    const trx = cx + bNorm / 2;
+    const tly = cy - hNorm / 2;
+    const bry = cy + hNorm / 2;
+    const verts = [u(tlx, tly), u(trx, tly), u(trx + shear, bry), u(tlx + shear, bry)];
+    return { name: 'PA', verts };
+  })()
+];
+
+// piece instances (pixel-space verts will be computed)
+const pieces = [];
+function computeGameBaseSize() {
+  return Math.min(480, Math.floor(Math.min(canvas.width, canvas.height) * 0.6));
+}
+let basePiecePx = computeGameBaseSize(); // match game's baseSize computation
+
+function setupPieces() {
+  pieces.length = 0;
+  // position pieces inside the dashed guide rectangle shown on the canvas
+  const guideX = 40;
+  const guideY = 40;
+  const guideW = canvas.width - 80;
+  const guideH = canvas.height - 120;
+  const padding = 20;
+  const startX = guideX + padding;
+  const startY = guideY + padding;
+  let i = 0;
+  // recompute base size in case canvas or preview scale changed
+  basePiecePx = computeGameBaseSize();
+  for (let poly of unitPolys) {
+    const w = basePiecePx * scale;
+    const h = basePiecePx * scale;
+    // build pixel verts centered
+    const abs = poly.verts.map(v => [ (v[0]-0.5) * w, (v[1]-0.5) * h ]);
+    // layout inside guide rect using responsive columns/rows
+    const num = unitPolys.length;
+    const availableW = Math.max(100, guideW - padding * 2);
+    const maxCols = 3;
+    const cols = Math.min(maxCols, Math.max(1, Math.floor(availableW / 220)));
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const rows = Math.ceil(num / cols);
+    const spacingX = availableW / cols;
+    const availableH = Math.max(100, guideH - padding * 2);
+    const spacingY = Math.min(180, availableH / Math.max(1, rows));
+    const px = startX + col * spacingX + spacingX / 2 + (Math.random()*20 - 10);
+    const py = startY + row * spacingY + spacingY / 2 + (Math.random()*20 - 10);
+    pieces.push({ name: poly.name, verts: abs, x: px, y: py, angle: 0, flipped: false, color: randomColor() });
+    i++;
+  }
+}
+
+function randomColor() { return `hsl(${Math.floor(Math.random()*360)},60%,60%)`; }
+
+let drag = null; let dragOffset = [0,0];
+canvas.addEventListener('mousedown', e => {
+  const p = canvasToLocal(e);
+  for (let i = pieces.length-1; i >=0; i--) {
+    const piece = pieces[i];
+    if (pointInPiece(p.x, p.y, piece)) { drag = piece; dragOffset = [p.x - piece.x, p.y - piece.y]; pieces.splice(i,1); pieces.push(drag); draw(); return; }
+  }
+});
+canvas.addEventListener('mousemove', e => {
+  if (!drag) return;
+  const p = canvasToLocal(e);
+  let nx = p.x - dragOffset[0];
+  let ny = p.y - dragOffset[1];
+  if (snapEnabled) {
+    nx = Math.round(nx / gridSize) * gridSize;
+    ny = Math.round(ny / gridSize) * gridSize;
+  }
+  drag.x = nx; drag.y = ny;
+  draw();
+});
+canvas.addEventListener('mouseup', e => { drag = null; });
+canvas.addEventListener('wheel', e => { e.preventDefault(); // rotate selected
+  if (!drag) return; drag.angle = (drag.angle + (e.deltaY>0?5:-5))%360; draw();
+});
+window.addEventListener('keydown', e => { if (e.key === 'r' && pieces.length>0) { const s = pieces[pieces.length-1]; s.angle = (s.angle+45)%360; draw(); } if (e.key==='f') { const s = pieces[pieces.length-1]; if (s) s.flipped = !s.flipped; draw(); }});
+
+function canvasToLocal(e) { const rect = canvas.getBoundingClientRect(); return { x: (e.clientX - rect.left), y: (e.clientY - rect.top) }; }
+
+function pointInPiece(px, py, piece) {
+  // transform to piece local coords
+  const cosA = Math.cos(piece.angle * Math.PI/180);
+  const sinA = Math.sin(piece.angle * Math.PI/180);
+  const dx = px - piece.x;
+  const dy = py - piece.y;
+  const rx = dx * cosA + dy * sinA;
+  const ry = -dx * sinA + dy * cosA;
+  // ray-cast
+  let inside = false;
+  const verts = piece.verts.map(v => [ piece.flipped ? -v[0] : v[0], v[1] ]);
+  for (let i = 0, j = verts.length-1; i < verts.length; j=i++) {
+    const xi = verts[i][0], yi = verts[i][1];
+    const xj = verts[j][0], yj = verts[j][1];
+    const intersect = ((yi>ry)!=(yj>ry)) && (rx < (xj-xi)*(ry-yi)/(yj-yi)+xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function drawPieceTo(ctx2, piece) {
+  ctx2.save();
+  ctx2.translate(piece.x, piece.y);
+  ctx2.rotate(piece.angle * Math.PI/180);
+  ctx2.fillStyle = piece.color;
+  ctx2.beginPath();
+  const verts = piece.verts.map(v => [ piece.flipped ? -v[0] : v[0], v[1] ]);
+  for (let i=0;i<verts.length;i++) { const v=verts[i]; if (i===0) ctx2.moveTo(v[0], v[1]); else ctx2.lineTo(v[0], v[1]); }
+  ctx2.closePath(); ctx2.fill();
+  ctx2.restore();
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // background
+  ctx.fillStyle = '#f7f7f7'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  // grid
+  drawGrid();
+  // draw guide target area
+  ctx.save(); ctx.strokeStyle='#ccc'; ctx.setLineDash([6,4]); ctx.strokeRect(40,40,canvas.width-80,canvas.height-120); ctx.restore();
+  // draw pieces
+  for (let p of pieces) drawPieceTo(ctx, p);
+  // draw labels
+  ctx.fillStyle='#000'; ctx.font='12px Arial'; ctx.fillText('Drag pieces, wheel to rotate, r to rotate 45°, f to flip', 10, canvas.height-10);
+}
+
+function drawGrid() {
+  const gs = Math.max(4, Math.floor(gridSize));
+  ctx.save();
+  ctx.strokeStyle = '#e0e0e0'; ctx.lineWidth = 1;
+  for (let x = 0; x <= canvas.width; x += gs) { ctx.beginPath(); ctx.moveTo(x+0.5,0); ctx.lineTo(x+0.5,canvas.height); ctx.stroke(); }
+  for (let y = 0; y <= canvas.height; y += gs) { ctx.beginPath(); ctx.moveTo(0,y+0.5); ctx.lineTo(canvas.width,y+0.5); ctx.stroke(); }
+  ctx.restore();
+}
+
+resetBtn.onclick = () => { scale = parseFloat(scaleRange.value); setupPieces(); draw(); };
+
+exportBtn.onclick = async () => {
+  const json = exportSilhouetteJSON();
+  const txt = JSON.stringify(json, null, 2);
+  out.value = txt;
+  try {
+    await navigator.clipboard.writeText(txt);
+    alert('Export JSON copied to clipboard (also shown in text area).');
+  } catch (err) {
+    alert('Exported JSON placed in text area. Copy to clipboard manually if needed.');
+  }
+};
+const saveBtn = document.getElementById('saveBtn');
+saveBtn.onclick = () => {
+  const json = exportSilhouetteJSON();
+  out.value = JSON.stringify(json, null, 2);
+  alert('Export JSON is in the text area; no file written.');
+};
+
+function exportSilhouetteJSON() {
+  // rasterize current pieces to offscreen canvas at same size
+  const w = canvas.width; const h = canvas.height;
+  const oc = document.createElement('canvas'); oc.width = w; oc.height = h; const octx = oc.getContext('2d');
+  octx.fillStyle = 'black'; octx.fillRect(0,0,w,h);
+  // draw pieces in white
+  for (let p of pieces) { octx.fillStyle = 'white'; drawPieceTo(octx, p); }
+  const im = octx.getImageData(0,0,w,h).data;
+  // build binary mask and find row extents
+  const mask = new Uint8Array(w*h);
+  let minX=w, minY=h, maxX=0, maxY=0; let any=false;
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++) {
+    const i = (y*w + x)*4;
+    const a = im[i]; // since white on black, sample red channel
+    const filled = a>10;
+    mask[y*w+x] = filled?1:0;
+    if (filled) { any=true; if (x<minX) minX=x; if (x>maxX) maxX=x; if (y<minY) minY=y; if (y>maxY) maxY=y; }
+  }
+  if (!any) return { error: 'No shapes drawn' };
+  // identify connected components (flood fill) and extract a contour for each
+  const labels = new Int32Array(w*h);
+  let labelId = 0;
+  const comps = {};
+  for (let y=minY;y<=maxY;y++) {
+    for (let x=minX;x<=maxX;x++) {
+      const idx = y*w + x;
+      if (mask[idx] && labels[idx] === 0) {
+        labelId++;
+        // flood fill stack
+        const stack = [idx];
+        labels[idx] = labelId;
+        comps[labelId] = { minX:x, maxX:x, minY:y, maxY:y };
+        while (stack.length) {
+          const cur = stack.pop();
+          const cy = Math.floor(cur / w);
+          const cx = cur - cy * w;
+          // 4-neighbors
+          const neighbors = [ [cx-1,cy], [cx+1,cy], [cx,cy-1], [cx,cy+1] ];
+          for (let nb of neighbors) {
+            const nx = nb[0], ny = nb[1];
+            if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+            const nidx = ny*w + nx;
+            if (mask[nidx] && labels[nidx] === 0) {
+              labels[nidx] = labelId; stack.push(nidx);
+              const c = comps[labelId];
+              if (nx < c.minX) c.minX = nx; if (nx > c.maxX) c.maxX = nx;
+              if (ny < c.minY) c.minY = ny; if (ny > c.maxY) c.maxY = ny;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function hasLabel(px, py, lbl) {
+    if (px < 0 || px >= w || py < 0 || py >= h) return false;
+    return labels[py * w + px] === lbl;
+  }
+
+  function pointKey(x, y) {
+    return `${x},${y}`;
+  }
+
+  function parsePointKey(key) {
+    const parts = key.split(',');
+    return [parseInt(parts[0], 10), parseInt(parts[1], 10)];
+  }
+
+  function polygonArea(points) {
+    if (!points || points.length < 3) return 0;
+    let area = 0;
+    for (let index = 0; index < points.length; index++) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      area += current[0] * next[1] - next[0] * current[1];
+    }
+    return area / 2;
+  }
+
+  function simplifyContour(points) {
+    if (!points || points.length < 4) return points ? points.slice() : [];
+    const unique = [];
+    for (let point of points) {
+      const previous = unique[unique.length - 1];
+      if (!previous || previous[0] !== point[0] || previous[1] !== point[1]) unique.push(point);
+    }
+    if (unique.length > 1) {
+      const first = unique[0];
+      const last = unique[unique.length - 1];
+      if (first[0] === last[0] && first[1] === last[1]) unique.pop();
+    }
+    if (unique.length < 3) return unique;
+
+    let changed = true;
+    while (changed && unique.length >= 3) {
+      changed = false;
+      for (let index = 0; index < unique.length; index++) {
+        const prev = unique[(index - 1 + unique.length) % unique.length];
+        const current = unique[index];
+        const next = unique[(index + 1) % unique.length];
+        const dx1 = current[0] - prev[0];
+        const dy1 = current[1] - prev[1];
+        const dx2 = next[0] - current[0];
+        const dy2 = next[1] - current[1];
+        if (dx1 * dy2 === dy1 * dx2) {
+          unique.splice(index, 1);
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    return unique;
+  }
+
+  function extractContourForLabel(lbl, comp) {
+    const outgoing = new Map();
+    const allEdges = new Set();
+
+    function addEdge(x1, y1, x2, y2) {
+      const startKey = pointKey(x1, y1);
+      const endKey = pointKey(x2, y2);
+      const edgeKey = `${startKey}->${endKey}`;
+      if (allEdges.has(edgeKey)) return;
+      allEdges.add(edgeKey);
+      if (!outgoing.has(startKey)) outgoing.set(startKey, []);
+      outgoing.get(startKey).push(endKey);
+    }
+
+    for (let y = comp.minY; y <= comp.maxY; y++) {
+      for (let x = comp.minX; x <= comp.maxX; x++) {
+        if (!hasLabel(x, y, lbl)) continue;
+        if (!hasLabel(x, y - 1, lbl)) addEdge(x, y, x + 1, y);
+        if (!hasLabel(x + 1, y, lbl)) addEdge(x + 1, y, x + 1, y + 1);
+        if (!hasLabel(x, y + 1, lbl)) addEdge(x + 1, y + 1, x, y + 1);
+        if (!hasLabel(x - 1, y, lbl)) addEdge(x, y + 1, x, y);
+      }
+    }
+
+    const usedEdges = new Set();
+    const loops = [];
+    for (let [startKey, ends] of outgoing.entries()) {
+      for (let endKey of ends) {
+        const initialEdge = `${startKey}->${endKey}`;
+        if (usedEdges.has(initialEdge)) continue;
+        const loop = [];
+        let currentStart = startKey;
+        let currentEnd = endKey;
+        let guard = 0;
+        while (guard < allEdges.size + 5) {
+          guard++;
+          usedEdges.add(`${currentStart}->${currentEnd}`);
+          loop.push(parsePointKey(currentStart));
+          currentStart = currentEnd;
+          if (currentStart === startKey) break;
+          const nextEnds = outgoing.get(currentStart) || [];
+          let nextEnd = null;
+          for (let candidate of nextEnds) {
+            const candidateEdge = `${currentStart}->${candidate}`;
+            if (!usedEdges.has(candidateEdge)) {
+              nextEnd = candidate;
+              break;
+            }
+          }
+          if (!nextEnd) break;
+          currentEnd = nextEnd;
+        }
+        if (loop.length >= 3) loops.push(loop);
+      }
+    }
+
+    if (!loops.length) return [];
+    loops.sort((left, right) => Math.abs(polygonArea(right)) - Math.abs(polygonArea(left)));
+    return simplifyContour(loops[0]);
+  }
+
+  const targets = [];
+  // global bbox across components
+  let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity;
+  for (let lid = 1; lid <= labelId; lid++) {
+    const comp = comps[lid];
+    if (!comp) continue;
+    gMinX = Math.min(gMinX, comp.minX); gMinY = Math.min(gMinY, comp.minY);
+    gMaxX = Math.max(gMaxX, comp.maxX); gMaxY = Math.max(gMaxY, comp.maxY);
+  }
+  if (!isFinite(gMinX)) return { error: 'No components found' };
+
+  const gBw = Math.max(1, gMaxX - gMinX + 1);
+  const gBh = Math.max(1, gMaxY - gMinY + 1);
+
+  for (let lid = 1; lid <= labelId; lid++) {
+    const comp = comps[lid];
+    if (!comp) continue;
+    const cMinX = comp.minX, cMinY = comp.minY, cMaxX = comp.maxX, cMaxY = comp.maxY;
+    const contour = extractContourForLabel(lid, comp);
+    if (contour.length < 3) continue;
+    const cbw = Math.max(1, cMaxX - cMinX + 1);
+    const cbh = Math.max(1, cMaxY - cMinY + 1);
+    const outline = contour.map(pt => [
+      parseFloat(((pt[0] - cMinX) / cbw).toFixed(6)),
+      parseFloat(((pt[1] - cMinY) / cbh).toFixed(6))
+    ]);
+    targets.push({
+      name: `object${lid}`,
+      bbox: [
+        parseFloat(((cMinX - gMinX) / gBw).toFixed(6)),
+        parseFloat(((cMinY - gMinY) / gBh).toFixed(6)),
+        parseFloat((cbw / gBw).toFixed(6)),
+        parseFloat((cbh / gBh).toFixed(6))
+      ],
+      outline
+    });
+  }
+
+  // build pieces list normalized to global bbox (gMinX/gMinY/gMaxX/gMaxY)
+  const piecesOut = pieces.map(p => {
+    const tx = (p.x - gMinX) / gBw; const ty = (p.y - gMinY) / gBh;
+    return { name: p.name, tx: parseFloat(tx.toFixed(4)), ty: parseFloat(ty.toFixed(4)), angle: Math.round(p.angle), flipped: !!p.flipped };
+  });
+
+  // compute game-aligned scale so that target size in game pixels equals maker global bbox size
+  const baseSize = computeGameBaseSize();
+  const sizePixel = Math.max(gBw, gBh, 1);
+  const targetScale = sizePixel / baseSize;
+
+  // top-level bbox inside game target area (normalized relative to final size)
+  const bboxW = parseFloat((gBw / sizePixel).toFixed(6));
+  const bboxH = parseFloat((gBh / sizePixel).toFixed(6));
+  const bboxX = 0.0; const bboxY = 0.0;
+
+  const level = {
+    name: 'Generated Level',
+    target: {
+      type: 'outline',
+      bbox: [bboxX, bboxY, bboxW, bboxH],
+      targets: targets,
+      scale: parseFloat(targetScale.toFixed(6)),
+      useBasePieceScale: true
+    },
+    pieces: piecesOut
+  };
+
+  // return wrapped structure compatible with viewer/merge scripts
+  return { levels: [ level ] };
+}
+
+function downloadJSON(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+// init
+setupPieces(); draw();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Level Debug - outlines</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 12px; }
+      #controls { margin-bottom: 8px; }
+      canvas { border: 1px solid #ddd; background: #fff; display:block; }
+      label { margin-right: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="controls">
+      <label for="levelSelect">Level:</label>
+      <select id="levelSelect"></select>
+      <button id="prevBtn">Prev</button>
+      <button id="nextBtn">Next</button>
+      <button id="reloadBtn">Reload</button>
+      <span id="info" style="margin-left:12px;color:#333"></span>
+    </div>
+    <canvas id="cv" width="800" height="600"></canvas>
+    <script src="level.js"></script>
+  </body>
+</html>

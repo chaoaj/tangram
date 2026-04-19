@@ -1,5 +1,8 @@
-// Tangram-like puzzle: draggable polygon pieces, rotation, snapping to target
-// Controls: drag with mouse, press 'r' to rotate selected piece 45° clockwise, 'R' to rotate counter-clockwise, 'h' to toggle hint, 'space' to reset
+// Tangram-like puzzle: draggable polygon pieces, rotation,
+// snapping to target
+// Controls: drag with mouse, press 'r' to rotate selected
+// piece 45° clockwise, 'R' to rotate counter-clockwise,
+// 'h' to toggle hint, 'space' to reset
 
 let pieces = [];
 let targetLayout = [];
@@ -14,6 +17,7 @@ let currentLevel = 0; // index into levelsData.levels
 // touch gesture helpers
 let lastTapTime = 0;
 let lastTapPos = null;
+let lastTapPieceName = null;
 let touchLastPos = null;
 
 function setup() {
@@ -26,6 +30,7 @@ function setup() {
     currentLevel = 0;
     initLevel();
     setupUI();
+        console.log('After initLevel, targetLayout[0]=', targetLayout[0] || null);
   }).catch(err => {
     console.error('failed to load levels.json', err);
     // fallback
@@ -43,10 +48,18 @@ function initLevel() {
   // load level data (levels.json) if available, otherwise use defaults
   const levelSpec = (levelsData && levelsData.levels && levelsData.levels[currentLevel]) || null;
   // target area on left
-  const size = min(480, floor(min(width, height) * 0.6));
+  const baseSize = min(480, floor(min(width, height) * 0.6));
+  let size = baseSize;
+  // allow per-level override: levelSpec.target.scale (multiplier applied to baseSize)
+  if (levelSpec && levelSpec.target && typeof levelSpec.target.scale === 'number') {
+    size = floor(baseSize * levelSpec.target.scale);
+    // cap size so it never exceeds available screen space
+    const maxAllowed = floor(min(width, height) * 0.9);
+    size = min(size, maxAllowed);
+  }
   const tx = 40; // left margin
-  // position target area about 200px from top, but keep it on-screen
-  let ty = 200;
+  // position target area about 200px from top, shifted down 50px (start lower)
+  let ty = 250; // was 200
   if (ty + size > height - 20) ty = max(20, height - size - 20);
   const scatterLeft = tx + size + 40; // start x for scattering pieces on right
 
@@ -115,14 +128,45 @@ function initLevel() {
   // build targets and pieces: map unit coords into actual target bbox using levelSpec.target bbox if present
   // target bbox normalized coordinates in levelSpec.target.bbox [x,y,w,h] (0..1)
   const targetBBox = levelSpec && levelSpec.target && levelSpec.target.bbox ? levelSpec.target.bbox : [0,0,1,1];
+  console.log('initLevel: currentLevel=', currentLevel, 'targetBBox=', targetBBox, 'outlinePts=', (levelSpec && levelSpec.target && levelSpec.target.outline) ? levelSpec.target.outline.length : 0);
+    if (levelSpec) console.log('initLevel: levelSpec.target=', levelSpec.target);
   const bx = tx + targetBBox[0] * size;
   const by = ty + targetBBox[1] * size;
   const bw = targetBBox[2] * size || size;
   const bh = targetBBox[3] * size || size;
-
-  // create targetLayout entry (single gray target region)
+  // build targetLayout: support either a single target (levelSpec.target.outline)
+  // or multiple targets in levelSpec.target.targets (array of {bbox, outline})
   targetLayout = [];
-  targetLayout.push({ name: 'targetRegion', x: bx + bw/2, y: by + bh/2, w: bw, h: bh });
+  if (levelSpec && levelSpec.target && Array.isArray(levelSpec.target.targets)) {
+    for (let td of levelSpec.target.targets) {
+      const tb = td.bbox || [0,0,1,1];
+      const tbx = bx + tb[0] * bw;
+      const tby = by + tb[1] * bh;
+      const tbw = tb[2] * bw || bw;
+      const tbh = tb[3] * bh || bh;
+      const entry = { name: td.name || 'targetRegion', x: tbx + tbw/2, y: tby + tbh/2, w: tbw, h: tbh };
+      if (td.outline) {
+        const ol = td.outline;
+        if (ol.length && Array.isArray(ol[0]) && ol[0].length && !Array.isArray(ol[0][0])) {
+          entry.outline = ol.map(pt => [tbx + pt[0] * tbw, tby + pt[1] * tbh]);
+        } else {
+          entry.outline = ol.map(ring => ring.map(pt => [tbx + pt[0] * tbw, tby + pt[1] * tbh]));
+        }
+      }
+      targetLayout.push(entry);
+    }
+  } else {
+    const entry = { name: 'targetRegion', x: bx + bw/2, y: by + bh/2, w: bw, h: bh };
+    if (levelSpec && levelSpec.target && levelSpec.target.outline) {
+      const ol = levelSpec.target.outline;
+      if (ol.length && Array.isArray(ol[0]) && ol[0].length && !Array.isArray(ol[0][0])) {
+        entry.outline = ol.map(pt => [bx + pt[0] * bw, by + pt[1] * bh]);
+      } else {
+        entry.outline = ol.map(ring => ring.map(pt => [bx + pt[0] * bw, by + pt[1] * bh]));
+      }
+    }
+    targetLayout.push(entry);
+  }
 
   // compute piece targets from levelSpec pieces (normalized tx,ty) if provided
   const pieceTargets = {};
@@ -161,7 +205,11 @@ function initLevel() {
 
   for (let poly of unitPolys) {
     // map absolute vertices into target-space to compute centroid if piece target not specified
-    const absVerts = poly.verts.map(v => [bx + v[0] * bw, by + v[1] * bh]);
+    // allow per-level override to keep piece geometry size equal to the base size
+    const useBasePieceScale = levelSpec && levelSpec.target && levelSpec.target.useBasePieceScale;
+    const pieceW = useBasePieceScale ? baseSize : bw;
+    const pieceH = useBasePieceScale ? baseSize : bh;
+    const absVerts = poly.verts.map(v => [bx + v[0] * pieceW, by + v[1] * pieceH]);
     let sx = 0, sy = 0;
     for (let v of absVerts) { sx += v[0]; sy += v[1]; }
     const cxv = sx / absVerts.length;
@@ -184,6 +232,17 @@ function initLevel() {
       target.angle = 45;
     }
     const p = new Piece(poly.name, verts, px, py, angle, color(random(80, 220), random(80, 220), random(80, 220), 220));
+    // allow per-level override of piece target positions (normalized tx,ty inside bbox)
+    if (pieceTargets && pieceTargets[poly.name]) {
+      const pt = pieceTargets[poly.name];
+      // tx,ty are normalized within the target bbox
+      if (typeof pt.tx === 'number' && typeof pt.ty === 'number') {
+        target.x = bx + pt.tx * bw;
+        target.y = by + pt.ty * bh;
+      }
+      if (typeof pt.angle === 'number') target.angle = pt.angle;
+      if (typeof pt.flipped === 'boolean') target.flipped = pt.flipped;
+    }
     p.target = target;
     pieces.push(p);
     console.log('created piece', poly.name, 'at', px.toFixed(1), py.toFixed(1));
@@ -242,14 +301,21 @@ class Piece {
     if (!this.target) return false;
     const dx = dist(this.pos.x, this.pos.y, this.target.x, this.target.y);
     const da = abs(((this.angle - this.target.angle + 180) % 360) - 180);
-    return dx < posThreshold && da < angleThreshold;
+    const flipMatches = typeof this.target.flipped === 'boolean' ? this.flipped === this.target.flipped : true;
+    return dx < posThreshold && da < angleThreshold && flipMatches;
   }
 
-  snapToTarget() {
+  setFlippedState(nextFlipped) {
+    if (typeof nextFlipped !== 'boolean' || this.flipped === nextFlipped) return;
+    this.flip();
+  }
+
+  snapToTarget(lockPiece = true) {
     if (!this.target) return;
+    this.setFlippedState(this.target.flipped);
     this.pos.set(this.target.x, this.target.y);
     this.angle = this.target.angle;
-    this.locked = true;
+    this.locked = lockPiece;
   }
 
   // flip piece horizontally (mirror in local x), toggles `flipped`
@@ -263,13 +329,6 @@ class Piece {
 
 function draw() {
   background(245);
-
-  // draw instruction
-  noStroke();
-  fill(60);
-  textSize(14);
-  text('Drag pieces to the left target area. Tap to select, swipe to rotate, H for hint, Space to reset.', 12, 22);
-
   // draw target area outline
   drawTargetArea();
 
@@ -353,18 +412,33 @@ function draw() {
 
 function drawTargetArea() {
   if (targetLayout.length === 0) return;
-  const t = targetLayout[0];
-  // draw filled gray region (no internal shape lines)
   push();
   noStroke();
   fill(200, 200, 200, 220);
-  rectMode(CENTER);
-  rect(t.x, t.y, t.w, t.h, 6);
-  // label
-  fill(40);
-  textSize(12);
-  textAlign(CENTER, TOP);
-  text('Target', t.x, t.y - t.h/2 - 18);
+  for (let ti = 0; ti < targetLayout.length; ti++) {
+    const t = targetLayout[ti];
+    if (t.outline && t.outline.length > 0) {
+      if (Array.isArray(t.outline[0]) && t.outline[0].length && Array.isArray(t.outline[0][0])) {
+        for (let ring of t.outline) {
+          beginShape();
+          for (let p of ring) vertex(p[0], p[1]);
+          endShape(CLOSE);
+        }
+      } else {
+        beginShape();
+        for (let p of t.outline) vertex(p[0], p[1]);
+        endShape(CLOSE);
+      }
+    } else {
+      rectMode(CENTER);
+      rect(t.x, t.y, t.w, t.h, 6);
+    }
+    // label
+    fill(40);
+    textSize(12);
+    textAlign(CENTER, TOP);
+    text('Target', t.x, t.y - t.h/2 - 18);
+  }
   pop();
 }
 
@@ -391,6 +465,28 @@ function mousePressed() {
   }
 }
 
+function findTopmostUnlockedPieceAt(x, y) {
+  for (let i = pieces.length - 1; i >= 0; i--) {
+    const p = pieces[i];
+    if (p.locked) continue;
+    if (p.contains(x, y)) return { piece: p, index: i };
+  }
+  return null;
+}
+
+function bringPieceToTop(piece, index) {
+  pieces.splice(index, 1);
+  pieces.push(piece);
+}
+
+function cycleSelectedPieceTransform() {
+  if (!selected || selected.locked) return;
+  const nextAngle = (selected.angle + 45) % 360;
+  const wrapped = nextAngle === 0;
+  selected.angle = nextAngle;
+  if (wrapped) selected.flip();
+}
+
 function mouseDragged() {
   if (selected && !selected.locked) {
     selected.pos.x = mouseX - offset.x;
@@ -405,7 +501,8 @@ function mouseReleased() {
       selected.snapToTarget();
     } else if (targetLayout.length > 0) {
       // try snapping to nearest edge of target region when releasing
-      const snapped = snapPieceToRectEdge(selected, targetLayout[0], 20);
+      const nearest = findNearestTargetRect(selected);
+      const snapped = snapPieceToRectEdge(selected, nearest, 20);
       if (snapped) {
         // do not lock unless angle matches; allow placement on edge
       }
@@ -420,43 +517,32 @@ function touchStarted() {
   didTouchMove = false;
   touchStartPos = { x: touches && touches[0] ? touches[0].x : mouseX, y: touches && touches[0] ? touches[0].y : mouseY };
   touchLastPos = { ...touchStartPos };
+  const hit = findTopmostUnlockedPieceAt(touchStartPos.x, touchStartPos.y);
   // double-tap detection
   const now = Date.now();
   const dt = now - (lastTapTime || 0);
   const tappedNear = lastTapPos && dist(touchStartPos.x, touchStartPos.y, lastTapPos.x, lastTapPos.y) < 40;
-  const isDouble = dt > 0 && dt < 350 && tappedNear;
-  if (isDouble) {
-    // detect piece under the tap and flip it
-    for (let i = pieces.length - 1; i >= 0; i--) {
-      const p = pieces[i];
-      if (p.contains(touchStartPos.x, touchStartPos.y)) {
-        p.flip();
-        // bring to top
-        pieces.splice(i, 1);
-        pieces.push(p);
-        return false;
-      }
-    }
-    lastTapTime = 0; lastTapPos = null;
+  const tappedPieceName = hit ? hit.piece.name : null;
+  const isDouble = dt > 0 && dt < 350 && tappedNear && !!hit && tappedPieceName === lastTapPieceName;
+  if (isDouble && selected === hit.piece) {
+    cycleSelectedPieceTransform();
+    lastTapTime = 0;
+    lastTapPos = null;
+    lastTapPieceName = null;
     return false;
   }
   lastTapTime = now;
   lastTapPos = { ...touchStartPos };
-  // reuse mousePressed logic but with touch coords
-  const tx = touchStartPos.x, ty = touchStartPos.y;
+  lastTapPieceName = tappedPieceName;
   if (levelComplete) return false;
-  for (let i = pieces.length - 1; i >= 0; i--) {
-    const p = pieces[i];
-    if (p.locked) continue;
-    if (p.contains(tx, ty)) {
-      selected = p;
-      pieces.splice(i, 1);
-      pieces.push(selected);
-      offset.x = tx - selected.pos.x;
-      offset.y = ty - selected.pos.y;
-      return false;
-    }
+  if (hit) {
+    selected = hit.piece;
+    bringPieceToTop(selected, hit.index);
+    offset.x = touchStartPos.x - selected.pos.x;
+    offset.y = touchStartPos.y - selected.pos.y;
+    return false;
   }
+  selected = null;
   return false;
 }
 
@@ -473,30 +559,29 @@ function touchMoved() {
 }
 
 function touchEnded() {
-  // if there was a tap (no meaningful move) and a piece was selected, rotate it
-  if (!didTouchMove && touchStartPos && selected) {
-    // single tap = rotate 90° clockwise
-    selected.angle = (selected.angle + 90) % 360;
-  } else if (didTouchMove && touchStartPos && selected) {
-    // swipe rotation based on horizontal direction
-    const end = touchLastPos || { x: mouseX, y: mouseY };
-    const dx = end.x - touchStartPos.x;
-    const dy = end.y - touchStartPos.y;
-    if (abs(dx) > 30 && abs(dx) > abs(dy)) {
-      selected.angle = (selected.angle + (dx > 0 ? 90 : -90)) % 360;
-    } else if (abs(dy) > 30 && abs(dy) > abs(dx)) {
-      // vertical swipe rotates opposite direction
-      selected.angle = (selected.angle + (dy < 0 ? 90 : -90)) % 360;
-    }
-  }
-  if (selected) {
+  if (selected && didTouchMove) {
     if (selected.checkSnap()) selected.snapToTarget();
-    else if (targetLayout.length > 0) snapPieceToRectEdge(selected, targetLayout[0], 20);
-    selected = null;
+    else if (targetLayout.length > 0) {
+      const nearest = findNearestTargetRect(selected);
+      snapPieceToRectEdge(selected, nearest, 20);
+    }
   }
   touchStartPos = null;
   didTouchMove = false;
   return false;
+}
+
+// find nearest target rect (by center distance) — returns a rect-like object from targetLayout
+function findNearestTargetRect(piece) {
+  if (!piece || !targetLayout || targetLayout.length === 0) return null;
+  let best = targetLayout[0];
+  let bestD = dist(piece.pos.x, piece.pos.y, best.x, best.y);
+  for (let i = 1; i < targetLayout.length; i++) {
+    const t = targetLayout[i];
+    const d = dist(piece.pos.x, piece.pos.y, t.x, t.y);
+    if (d < bestD) { best = t; bestD = d; }
+  }
+  return best;
 }
 
 function keyPressed() {
@@ -574,6 +659,7 @@ function snapPieceToRectEdge(piece, rect, threshold = 18) {
 function setupUI() {
   const levelSelect = document.getElementById('levelSelect');
   const checkBtn = document.getElementById('checkBtn');
+  const showAnswerBtn = document.getElementById('showAnswerBtn');
   const resetBtn = document.getElementById('resetBtn');
 
   // populate level select
@@ -593,13 +679,33 @@ function setupUI() {
   levelSelect.onchange = () => {
     const idx = parseInt(levelSelect.value || '0', 10);
     if (!isNaN(idx)) {
-      currentLevel = idx;
-      initLevel();
+      // reload levels.json so changes (merged files) are reflected immediately
+      fetch('levels.json').then(r => r.json()).then(data => {
+        levelsData = data;
+        currentLevel = idx;
+        console.log('Level change -> currentLevel=', currentLevel, 'levelsCount=', (levelsData && levelsData.levels && levelsData.levels.length) || 0);
+        initLevel();
+      }).catch(err => {
+        console.warn('Failed to reload levels.json on level change', err);
+        currentLevel = idx;
+        initLevel();
+      });
     }
   };
 
   checkBtn.onclick = () => checkSolution();
+  if (showAnswerBtn) showAnswerBtn.onclick = () => showAnswer();
   resetBtn.onclick = () => initLevel();
+}
+
+function showAnswer() {
+  if (pieces.length === 0) return;
+  selected = null;
+  for (let piece of pieces) {
+    if (!piece.target) continue;
+    piece.snapToTarget(true);
+  }
+  levelComplete = true;
 }
 
 function checkSolution() {
@@ -608,78 +714,135 @@ function checkSolution() {
     alert('No target defined for this level.');
     return;
   }
-  const t = targetLayout[0];
-  // create offscreen graphics matching target pixel size
-  const gw = max(1, floor(t.w));
-  const gh = max(1, floor(t.h));
-  const gAll = createGraphics(gw, gh);
-  gAll.pixelDensity(1);
-  gAll.background(0);
-  gAll.noStroke();
-  gAll.fill(255);
+  const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
 
-  // helper to draw a piece onto a graphics buffer (coords relative to target top-left)
-  function drawPieceTo(gfx, piece) {
+  function expandBoundsWithPoint(x, y) {
+    bounds.minX = min(bounds.minX, x);
+    bounds.minY = min(bounds.minY, y);
+    bounds.maxX = max(bounds.maxX, x);
+    bounds.maxY = max(bounds.maxY, y);
+  }
+
+  function expandBoundsWithTarget(target) {
+    if (target.outline && target.outline.length > 0) {
+      if (Array.isArray(target.outline[0]) && target.outline[0].length && Array.isArray(target.outline[0][0])) {
+        for (let ring of target.outline) {
+          for (let point of ring) expandBoundsWithPoint(point[0], point[1]);
+        }
+      } else {
+        for (let point of target.outline) expandBoundsWithPoint(point[0], point[1]);
+      }
+      return;
+    }
+    expandBoundsWithPoint(target.x - target.w / 2, target.y - target.h / 2);
+    expandBoundsWithPoint(target.x + target.w / 2, target.y + target.h / 2);
+  }
+
+  function drawPieceTo(gfx, piece, offsetX, offsetY) {
     gfx.push();
     gfx.noStroke();
     gfx.fill(255);
     gfx.beginShape();
     for (let v of piece.vertices) {
-      // local vertex -> world
       const wx = piece.pos.x + (v[0] * cos(piece.angle) - v[1] * sin(piece.angle));
       const wy = piece.pos.y + (v[0] * sin(piece.angle) + v[1] * cos(piece.angle));
-      // transform to target-local coords (top-left origin)
-      const localX = wx - (t.x - t.w / 2);
-      const localY = wy - (t.y - t.h / 2);
-      gfx.vertex(localX, localY);
+      gfx.vertex(wx - offsetX, wy - offsetY);
     }
     gfx.endShape(CLOSE);
     gfx.pop();
   }
 
-  // draw combined
-  for (let p of pieces) drawPieceTo(gAll, p);
-  gAll.loadPixels();
-  let combinedPx = 0;
-  for (let i = 0; i < gAll.pixels.length; i += 4) {
-    if (gAll.pixels[i] > 0) combinedPx++;
+  function drawTargetTo(gfx, target, offsetX, offsetY) {
+    gfx.push();
+    gfx.noStroke();
+    gfx.fill(255);
+    if (target.outline && target.outline.length > 0) {
+      if (Array.isArray(target.outline[0]) && target.outline[0].length && Array.isArray(target.outline[0][0])) {
+        for (let ring of target.outline) {
+          gfx.beginShape();
+          for (let point of ring) gfx.vertex(point[0] - offsetX, point[1] - offsetY);
+          gfx.endShape(CLOSE);
+        }
+      } else {
+        gfx.beginShape();
+        for (let point of target.outline) gfx.vertex(point[0] - offsetX, point[1] - offsetY);
+        gfx.endShape(CLOSE);
+      }
+    } else {
+      gfx.rectMode(CORNER);
+      gfx.rect(target.x - target.w / 2 - offsetX, target.y - target.h / 2 - offsetY, target.w, target.h);
+    }
+    gfx.pop();
   }
 
-  // draw each piece individually and sum pixels
-  let sumIndividual = 0;
-  for (let p of pieces) {
+  for (let target of targetLayout) expandBoundsWithTarget(target);
+  if (!isFinite(bounds.minX) || !isFinite(bounds.minY)) {
+    alert('Target bounds are invalid for this level.');
+    return;
+  }
+
+  const pad = 2;
+  const originX = floor(bounds.minX) - pad;
+  const originY = floor(bounds.minY) - pad;
+  const gw = max(1, ceil(bounds.maxX - bounds.minX) + pad * 2 + 1);
+  const gh = max(1, ceil(bounds.maxY - bounds.minY) + pad * 2 + 1);
+
+  const gTarget = createGraphics(gw, gh);
+  gTarget.pixelDensity(1);
+  gTarget.background(0);
+  for (let target of targetLayout) drawTargetTo(gTarget, target, originX, originY);
+  gTarget.loadPixels();
+
+  const gCombined = createGraphics(gw, gh);
+  gCombined.pixelDensity(1);
+  gCombined.background(0);
+  for (let piece of pieces) drawPieceTo(gCombined, piece, originX, originY);
+  gCombined.loadPixels();
+
+  let targetAreaPx = 0;
+  let coveredTargetPx = 0;
+  let spillPx = 0;
+  for (let i = 0; i < gTarget.pixels.length; i += 4) {
+    const targetFilled = gTarget.pixels[i] > 0;
+    const pieceFilled = gCombined.pixels[i] > 0;
+    if (targetFilled) targetAreaPx++;
+    if (targetFilled && pieceFilled) coveredTargetPx++;
+    if (!targetFilled && pieceFilled) spillPx++;
+  }
+
+  let sumIndividualTarget = 0;
+  for (let piece of pieces) {
     const gi = createGraphics(gw, gh);
     gi.pixelDensity(1);
     gi.background(0);
-    gi.noStroke();
-    gi.fill(255);
-    drawPieceTo(gi, p);
+    drawPieceTo(gi, piece, originX, originY);
     gi.loadPixels();
-    let pxCount = 0;
-    for (let i = 0; i < gi.pixels.length; i += 4) if (gi.pixels[i] > 0) pxCount++;
-    sumIndividual += pxCount;
+    for (let i = 0; i < gi.pixels.length; i += 4) {
+      if (gTarget.pixels[i] > 0 && gi.pixels[i] > 0) sumIndividualTarget++;
+    }
   }
 
-  // overlap exists if sum of individual covered pixels > combined covered pixels
-  const overlapPx = Math.max(0, sumIndividual - combinedPx);
+  const overlapPx = max(0, sumIndividualTarget - coveredTargetPx);
+  const coverage = targetAreaPx > 0 ? coveredTargetPx / targetAreaPx : 0;
+  const overlapFraction = targetAreaPx > 0 ? overlapPx / targetAreaPx : 0;
+  const spillFraction = targetAreaPx > 0 ? spillPx / targetAreaPx : 0;
 
-  const targetAreaPx = gw * gh;
-  const coverage = combinedPx / targetAreaPx;
-  const overlapFraction = overlapPx / targetAreaPx;
-
-  // relaxed acceptance rules: allow small overlaps (<= 2% of target) and slightly lower coverage threshold
-  const maxOverlapFraction = 0.02; // allow up to 2% overlap
-  const coverageThreshold = 0.97; // 97% coverage required
+  const maxOverlapFraction = 0.02;
+  const maxSpillFraction = 0.02;
+  const coverageThreshold = 0.97;
 
   if (overlapFraction > maxOverlapFraction) {
     alert(`Too much overlap inside target (${(overlapFraction*100).toFixed(2)}%). Reduce overlaps.`);
     return;
   }
+  if (spillFraction > maxSpillFraction) {
+    alert(`Pieces extend outside target (${(spillFraction*100).toFixed(2)}%). Move them inside the outline.`);
+    return;
+  }
   if (coverage >= coverageThreshold) {
-    // snap any that are very close
     for (let p of pieces) if (!p.locked && p.checkSnap(20, 18)) p.snapToTarget();
     levelComplete = true;
-    alert(`Solution accepted — coverage ${(coverage*100).toFixed(1)}% overlap ${(overlapFraction*100).toFixed(2)}%.`);
+    alert(`Solution accepted — coverage ${(coverage*100).toFixed(1)}% overlap ${(overlapFraction*100).toFixed(2)}% spill ${(spillFraction*100).toFixed(2)}%.`);
   } else {
     alert(`Coverage ${(coverage*100).toFixed(1)}% — need ${(coverageThreshold*100).toFixed(0)}% to complete.`);
   }

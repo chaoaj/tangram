@@ -1,0 +1,65 @@
+{
+  "meta": {
+    "coordSpace": "normalized",
+    "description": "Levels use normalized coordinates (0..1) inside the target bbox"
+  },
+  "levels": [
+    {
+      "id": 1,
+      "name": "Square",
+      "target": {
+        "type": "rect",
+        "bbox": [
+          0,
+          0,
+          1,
+          1
+        ]
+      },
+      "pieces": [
+        {
+          "name": "LT_top",
+          "tx": 0.5,
+          "ty": 0.25,
+          "angle": 0
+        },
+        {
+          "name": "LT_left",
+          "tx": 0.25,
+          "ty": 0.5,
+          "angle": 0
+        },
+        {
+          "name": "MT",
+          "tx": 0.75,
+          "ty": 0.5,
+          "angle": 0
+        },
+        {
+          "name": "ST1",
+          "tx": 0.25,
+          "ty": 0.75,
+          "angle": 0
+        },
+        {
+          "name": "ST2",
+          "tx": 0.75,
+          "ty": 0.75,
+          "angle": 0
+        },
+        {
+          "name": "SQ",
+          "tx": 0.5,
+          "ty": 0.5,
+          "angle": 0
+        },
+        {
+          "name": "PA",
+          "tx": 0.62,
+          "ty": 0.5,
+          "angle": 0
+        }
+      ]
+    }
+  ]
+}

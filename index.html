@@ -14,12 +14,16 @@
 
   <body>
     <div id="controls" style="position:fixed;top:8px;left:8px;z-index:999;background:rgba(255,255,255,0.95);padding:8px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.12);max-width:320px;">
+      <h1>Tangrams</h1>
       <label for="levelSelect">Level:</label>
       <select id="levelSelect"></select>
       <button id="checkBtn">Check Solution</button>
+      <button id="showAnswerBtn">Give Up / Show Answer</button>
       <button id="resetBtn">Reset</button>
-      <div id="directions" style="margin-top:8px;font-size:13px;color:#222;line-height:1.25;">
-        Arrange pieces into the gray target on the left. Use mouse or touch to drag, tap/drag to rotate, press <strong>f</strong> to flip and <strong>r</strong> to rotate. When pieces fully cover the target without overlapping, click <strong>Check Solution</strong>.
+      <div id="directions" style="margin-top:8px;font-size:11px;color:#222;line-height:1.25;">
+        Arrange pieces in the gray target(s). Touch to drag, double tap to rotate/flip or <strong>f</strong>
+        to flip and <strong>r</strong> to rotate. When pieces fully
+        cover the target, click <strong>Check Solution</strong> or <strong>Give Up / Show Answer</strong>.
       </div>
     </div>
     <script src="sketch.js"></script>
