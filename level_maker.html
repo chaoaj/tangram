@@ -434,10 +434,34 @@ function exportSilhouetteJSON() {
     });
   }
 
-  // build pieces list normalized to global bbox (gMinX/gMinY/gMaxX/gMaxY)
+  // build pieces list: assign each piece to the component it sits in (if any)
+  // and export tx/ty normalized inside that component's bbox. If a piece
+  // does not fall inside any component, fall back to global-normalized coords.
   const piecesOut = pieces.map(p => {
-    const tx = (p.x - gMinX) / gBw; const ty = (p.y - gMinY) / gBh;
-    return { name: p.name, tx: parseFloat(tx.toFixed(4)), ty: parseFloat(ty.toFixed(4)), angle: Math.round(p.angle), flipped: !!p.flipped };
+    const xi = Math.round(p.x);
+    const yi = Math.round(p.y);
+    let assignedLabel = 0;
+    if (xi >= 0 && xi < w && yi >= 0 && yi < h) assignedLabel = labels[yi * w + xi] || 0;
+    if (assignedLabel > 0 && comps[assignedLabel]) {
+      const comp = comps[assignedLabel];
+      const cbw = Math.max(1, comp.maxX - comp.minX + 1);
+      const cbh = Math.max(1, comp.maxY - comp.minY + 1);
+      const txLocal = (p.x - comp.minX) / cbw;
+      const tyLocal = (p.y - comp.minY) / cbh;
+      return {
+        name: p.name,
+        target: `object${assignedLabel}`,
+        tx: parseFloat(txLocal.toFixed(4)),
+        ty: parseFloat(tyLocal.toFixed(4)),
+        angle: Math.round(p.angle),
+        flipped: !!p.flipped
+      };
+    } else {
+      // fallback: global-normalized
+      const tx = (p.x - gMinX) / gBw;
+      const ty = (p.y - gMinY) / gBh;
+      return { name: p.name, tx: parseFloat(tx.toFixed(4)), ty: parseFloat(ty.toFixed(4)), angle: Math.round(p.angle), flipped: !!p.flipped };
+    }
   });
 
   // compute game-aligned scale so that target size in game pixels equals maker global bbox size

@@ -204,12 +204,25 @@ function initLevel() {
   }
 
   for (let poly of unitPolys) {
-    // map absolute vertices into target-space to compute centroid if piece target not specified
-    // allow per-level override to keep piece geometry size equal to the base size
+    // decide which target region this piece should be sized against
+    // default is the top-level bbox (bx,by,bw,bh)
     const useBasePieceScale = levelSpec && levelSpec.target && levelSpec.target.useBasePieceScale;
-    const pieceW = useBasePieceScale ? baseSize : bw;
-    const pieceH = useBasePieceScale ? baseSize : bh;
-    const absVerts = poly.verts.map(v => [bx + v[0] * pieceW, by + v[1] * pieceH]);
+    let assigned = { x: bx, y: by, w: bw, h: bh, name: 'targetRegion' };
+    if (pieceTargets && pieceTargets[poly.name]) {
+      const pt = pieceTargets[poly.name];
+      if (pt.target && targetLayout && targetLayout.length) {
+        const found = targetLayout.find(t => t.name === pt.target);
+        if (found) assigned = { x: found.x, y: found.y, w: found.w, h: found.h, name: found.name };
+      } else if (typeof pt.targetIndex === 'number' && targetLayout[pt.targetIndex]) {
+        const found = targetLayout[pt.targetIndex];
+        assigned = { x: found.x, y: found.y, w: found.w, h: found.h, name: found.name };
+      }
+    }
+    const leftX = assigned.x - assigned.w / 2;
+    const topY = assigned.y - assigned.h / 2;
+    const pieceW = useBasePieceScale ? baseSize : assigned.w;
+    const pieceH = useBasePieceScale ? baseSize : assigned.h;
+    const absVerts = poly.verts.map(v => [leftX + v[0] * pieceW, topY + v[1] * pieceH]);
     let sx = 0, sy = 0;
     for (let v of absVerts) { sx += v[0]; sy += v[1]; }
     const cxv = sx / absVerts.length;
@@ -232,13 +245,17 @@ function initLevel() {
       target.angle = 45;
     }
     const p = new Piece(poly.name, verts, px, py, angle, color(random(80, 220), random(80, 220), random(80, 220), 220));
-    // allow per-level override of piece target positions (normalized tx,ty inside bbox)
+    // allow per-level override of piece target positions (normalized tx,ty inside the
+    // assigned target bbox). Backwards-compatible: if a piece target has tx/ty but
+    // no `target` property, it will be interpreted relative to the top-level bbox.
     if (pieceTargets && pieceTargets[poly.name]) {
       const pt = pieceTargets[poly.name];
-      // tx,ty are normalized within the target bbox
       if (typeof pt.tx === 'number' && typeof pt.ty === 'number') {
-        target.x = bx + pt.tx * bw;
-        target.y = by + pt.ty * bh;
+        // compute world coords from assigned target left/top and size
+        const left = assigned.x - assigned.w / 2;
+        const top = assigned.y - assigned.h / 2;
+        target.x = left + pt.tx * assigned.w;
+        target.y = top + pt.ty * assigned.h;
       }
       if (typeof pt.angle === 'number') target.angle = pt.angle;
       if (typeof pt.flipped === 'boolean') target.flipped = pt.flipped;
@@ -246,6 +263,7 @@ function initLevel() {
     p.target = target;
     pieces.push(p);
     console.log('created piece', poly.name, 'at', px.toFixed(1), py.toFixed(1));
+    console.log('  assigned target', assigned.name, 'size', assigned.w.toFixed(1), assigned.h.toFixed(1), 'pieceW', pieceW.toFixed(1), 'pieceH', pieceH.toFixed(1));
     console.log('  abs verts:', absVerts.map(v => `(${v[0].toFixed(1)},${v[1].toFixed(1)})`).join(', '));
     console.log('  centroid:', cxv.toFixed(1), cyv.toFixed(1));
     console.log('  rel verts:', relVerts.map(v => `(${v[0].toFixed(1)},${v[1].toFixed(1)})`).join(', '));
